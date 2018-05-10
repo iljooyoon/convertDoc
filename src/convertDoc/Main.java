@@ -8,21 +8,93 @@ import java.io.FileWriter;
 import java.util.StringTokenizer;
 
 public class Main {
+	static private String MODE;
+	private static File sourcePath;
+	private static File outputDir;
+	private static int cnt;
+	private static int[] order;
+	
 	public static void main(String[] args) {
+		if (args == null || args.length != 1) {
+			printHelp();
+			System.exit(0);
+		}
+		
+		MODE = args[0];
+		
 		String[] settings = readSettingsFile();
-
-		File sourcePath = new File(settings[0]);
-		File outputDir = new File(settings[1]);
-		int cnt = Integer.parseInt(settings[2]);
-		int[] order = setOrders(settings[3]);
-
-		StringBuffer sb = new StringBuffer();
-
+		
+		sourcePath = new File(settings[0]);
+		outputDir = new File(settings[1]);
+		
 		if (!sourcePath.exists()) {
 			System.err.println(sourcePath.getPath() + " 폴더가 존재하지 않습니다.");
 			System.exit(0);
 		}
 		
+		if ("clsf".equals(MODE.toLowerCase())) {
+			clsfMain();
+		}
+		else if ("rearrange".equals(MODE.toLowerCase())) {
+			cnt = Integer.parseInt(settings[2]);
+			order = setOrders(settings[3]);
+			
+			rearrangeMain();
+		}
+		else {
+			printHelp();
+			System.exit(0);
+		}
+	}
+
+	private static void clsfMain() {
+		for (File f : sourcePath.listFiles()) {
+			if (f.isFile() && isTargetFile(f.getName())) {
+				if (!outputDir.exists())
+					outputDir.mkdirs();
+				
+				boolean isHOGA = f.getName().indexOf("HOGA") >= 0;
+
+				try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+					String line;
+
+					while ((line = br.readLine()) != null) {
+						String[] data = line.split(",");
+						String filename;
+
+						// 호가 : HOGA => 종목코드_orderbook
+						if (isHOGA) {
+							filename = f.getName().replace("HOGA", data[0] + "_orderbook");
+						}
+						// 체결 : EXCUTED => 종목코드_executed
+						else {
+							filename = f.getName().replace("EXCUTED", data[0] + "_executed");
+						}
+						
+						String targetName = outputDir.getAbsolutePath() + File.separator + filename; // 이름 변경. YYYY-MM-DD_종목번호_HOGA
+						
+						try(BufferedWriter bw = new BufferedWriter(new FileWriter(targetName, true))) {
+							bw.write(line);
+							bw.newLine();
+						}
+					}
+				} catch (Exception e) {
+					throw new RuntimeException(e);
+				}
+				System.out.println(f.getName() + " is split.");
+			}
+		}
+	}
+
+	private static boolean isTargetFile(String filename) {
+		return filename.toLowerCase().endsWith(".csv")
+				&& (filename.indexOf("KOSDAQ") >= 0 || filename.indexOf("KOSPI") >= 0)
+				&& (filename.indexOf("HOGA") >= 0 || filename.indexOf("EXCUTED") >= 0);
+	}
+
+	private static void rearrangeMain() {
+		StringBuffer sb = new StringBuffer();
+
 		int convertCnt = 0;
 		
 		for (File f : sourcePath.listFiles()) {
@@ -65,10 +137,23 @@ public class Main {
 			}
 		}
 		
+		
 		if (convertCnt == 0)
 			System.out.println("There is no file in " + sourcePath.getPath());
 		else
-			System.out.println(convertCnt + " files created.");
+			System.out.println(convertCnt + " files created.");		
+	}
+
+	private static void printHelp() {
+		System.out.println("[사용법]");
+		System.out.println("java -jar convertDoc.jar {mode}");
+		System.out.println("예) java -jar convertDoc.jar clsf");
+		System.out.println();
+		System.out.println("※ mode 종류");
+		System.out.println("clsf : 파일을 종목코드 별로 분류");
+		System.out.println("rearrange : 파일 내의 컬럼 순서를 변경");
+		System.out.println();
+		System.out.println("※ settings.ini 파일 설정 필요");
 	}
 
 	private static int[] setOrders(String orderString) {
@@ -102,7 +187,7 @@ public class Main {
 				}
 			}
 
-			if (i != 4) {
+			if (!("clsf".equals(MODE) && i >= 2 || "rearrange".equals(MODE) && i >= 4)) {
 				System.err.println(confFile + " 설정 형식 오류");
 				System.exit(0);
 			}
