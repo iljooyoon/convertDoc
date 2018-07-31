@@ -5,58 +5,78 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.StringTokenizer;
 
 public class Main {
-	static private String MODE;
-	private static File sourcePath;
-	private static File outputDir;
+	private static String MODE;
+	private static Map<String, ArrayList<String>> TEXT_MAP = new HashMap<String, ArrayList<String>>();
+	private static File sourcePath = null;
+	private static File outputDir = null;
+	private static File moveDir = null;
 	private static int cnt;
 	private static int[] order;
-	
+
 	public static void main(String[] args) {
 		if (args == null || args.length != 1) {
 			printHelp();
 			System.exit(0);
 		}
-		
+
 		MODE = args[0];
-		
-		String[] settings = readSettingsFile();
-		
-		sourcePath = new File(settings[0]);
-		outputDir = new File(settings[1]);
-		
+
+		Map<String, String> settings = readSettingsFile();
+
+		sourcePath = new File(getValue(settings, "INPUT_FOLDER"));
+		outputDir = new File(getValue(settings, "OUTPUT_FOLDER"));
+
+		if (settings.containsKey("MOVE_FOLDER")) {
+			moveDir = new File(settings.get("MOVE_FOLDER"));
+		}
+
 		if (!sourcePath.exists()) {
 			System.err.println(sourcePath.getPath() + " 폴더가 존재하지 않습니다.");
 			System.exit(0);
 		}
-		
+
 		if ("clsf".equals(MODE.toLowerCase())) {
 			clsfMain();
-		}
-		else if ("rearrange".equals(MODE.toLowerCase())) {
-			cnt = Integer.parseInt(settings[2]);
-			order = setOrders(settings[3]);
-			
+		} else if ("rearrange".equals(MODE.toLowerCase())) {
+			cnt = Integer.parseInt(getValue(settings, "COLUMN_COUNT"));
+			order = setOrders(getValue(settings, "ORDER"));
+
 			rearrangeMain();
-		}
-		else {
+		} else {
 			printHelp();
 			System.exit(0);
+		}
+	}
+
+	private static String getValue(Map<String, String> settings, String key) {
+		if (settings.containsKey(key)) {
+			return settings.get(key);
+		} else {
+			throw new RuntimeException(key + " 가 입력되지 않았습니다.");
 		}
 	}
 
 	private static void clsfMain() {
 		for (File f : sourcePath.listFiles()) {
 			if (f.isFile() && isTargetFile(f.getName())) {
-				if (!outputDir.exists())
-					outputDir.mkdirs();
-				
+				if (!outputDir.exists()) {
+					if (!outputDir.mkdirs()) {
+						throw new RuntimeException("Folder Creation Fail.");
+					}
+				}
+
 				boolean isHOGA = f.getName().indexOf("HOGA") >= 0;
 
 				try (BufferedReader br = new BufferedReader(new FileReader(f))) {
 					String line;
+
+					int cnt = 0;
 
 					while ((line = br.readLine()) != null) {
 						String[] data = line.split(",");
@@ -70,20 +90,108 @@ public class Main {
 						else {
 							filename = f.getName().replace("EXCUTED", data[0] + "_executed");
 						}
-						
-						String targetName = outputDir.getAbsolutePath() + File.separator + filename; // 이름 변경. YYYY-MM-DD_종목번호_HOGA
-						
-						try(BufferedWriter bw = new BufferedWriter(new FileWriter(targetName, true))) {
-							bw.write(line);
-							bw.newLine();
+
+						String key = outputDir.getAbsolutePath() + File.separator + filename;
+
+						if (TEXT_MAP.containsKey(key)) {
+							TEXT_MAP.get(key).add(line);
+						} else {
+							ArrayList<String> value = new ArrayList<String>();
+
+							value.add(line);
+
+							TEXT_MAP.put(key, value);
+						}
+
+						if (cnt++ > 100000) {
+							cnt = 0;
+							writeTextMap();
 						}
 					}
+				} catch (RuntimeException e) {
+					throw e;
 				} catch (Exception e) {
 					throw new RuntimeException(e);
+				} finally {
+					writeTextMap();
 				}
 				System.out.println(f.getName() + " is split.");
+
+				moveFile();
 			}
 		}
+	}
+
+	private static void moveFile() {
+		try {
+			// 결과 파일 이동 옵션
+			if (moveDir != null) {
+				for (File source : outputDir.listFiles()) {
+					File target = new File(moveDir.getAbsolutePath() + File.separator + source.getName());
+					
+					int retry = 0;
+					while (true) {
+						try {
+							if (target.createNewFile()) {
+								break;
+							}
+							retry++;
+							Thread.sleep(200);
+							
+							if (retry > 10) {
+								throw new RuntimeException("File create error!");
+							}
+						} catch (Exception e) {
+							retry++;
+							
+							if (retry > 10) {
+								throw new RuntimeException("File move error!");
+							}
+						}
+					}
+					
+					try (BufferedReader br = new BufferedReader(new FileReader(source))) {
+						try (BufferedWriter bw = new BufferedWriter(new FileWriter(target))) {
+							String line;
+							
+							while ((line = br.readLine()) != null) {
+								while (true) {
+									try {
+										bw.write(line + "\n");
+										break;
+									} catch (Exception e) {
+										retry++;
+										
+										if (retry > 10) {
+											throw new RuntimeException("File move error!");
+										}
+									}
+								}
+							}
+							source.delete();
+							
+							System.out.println(source.getName() + " file is moved.");
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+
+	private static void writeTextMap() {
+		for (String targetName : TEXT_MAP.keySet()) {
+			try (BufferedWriter bw = new BufferedWriter(new FileWriter(targetName, true))) {
+				for (String text : TEXT_MAP.get(targetName)) {
+					bw.write(text);
+					bw.newLine();
+				}
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
+		TEXT_MAP.clear();
 	}
 
 	private static boolean isTargetFile(String filename) {
@@ -96,7 +204,7 @@ public class Main {
 		StringBuffer sb = new StringBuffer();
 
 		int convertCnt = 0;
-		
+
 		for (File f : sourcePath.listFiles()) {
 			if (f.isFile() && f.getName().toLowerCase().endsWith(".csv")) {
 				if (!outputDir.exists())
@@ -122,9 +230,9 @@ public class Main {
 							}
 							bw.write(sb.toString());
 							bw.newLine();
-						}
-						else {
-							System.err.println("데이터 열의 갯수가 일치하지 않습니다. (column count : " + data.length + ", settings value : " + cnt + "\ndata : " + line);
+						} else {
+							System.err.println("데이터 열의 갯수가 일치하지 않습니다. (column count : " + data.length
+									+ ", settings value : " + cnt + "\ndata : " + line);
 							System.exit(0);
 						}
 					}
@@ -136,12 +244,11 @@ public class Main {
 				convertCnt++;
 			}
 		}
-		
-		
+
 		if (convertCnt == 0)
 			System.out.println("There is no file in " + sourcePath.getPath());
 		else
-			System.out.println(convertCnt + " files created.");		
+			System.out.println(convertCnt + " files created.");
 	}
 
 	private static void printHelp() {
@@ -166,7 +273,7 @@ public class Main {
 		return orders;
 	}
 
-	private static String[] readSettingsFile() {
+	private static Map<String, String> readSettingsFile() {
 		File confFile = new File("settings.ini");
 
 		if (!confFile.exists()) {
@@ -174,22 +281,18 @@ public class Main {
 			System.exit(0);
 		}
 
-		String[] settings = new String[4];
+		Map<String, String> settings = new HashMap<String, String>();
 
 		try (BufferedReader br = new BufferedReader(new FileReader(confFile))) {
 			String text;
 
-			int i = 0;
-
 			while ((text = br.readLine()) != null) {
-				if (!text.trim().startsWith("#")) {
-					settings[i++] = text;
-				}
-			}
+				String trimedStr = text.trim();
+				if (!trimedStr.isEmpty() && !trimedStr.startsWith("#")) {
+					String[] split = trimedStr.split("=");
 
-			if (!("clsf".equals(MODE) && i >= 2 || "rearrange".equals(MODE) && i >= 4)) {
-				System.err.println(confFile + " 설정 형식 오류");
-				System.exit(0);
+					settings.put(split[0], split[1]);
+				}
 			}
 		} catch (Exception e) {
 			throw new RuntimeException(e);
